@@ -27,6 +27,15 @@ import (
 	"go.opentelemetry.io/collector/pdata/pcommon"
 )
 
+const (
+	// a zero offset is compatible with any other positive offsets
+	//negative offsets are only relevant when the histogram tracks floats
+	defaultOffset = 0
+	// aligned with the max buckets configuration option in lsm interval processor
+	// the merge logic is compatible, but not optimized for histograms with more buckets
+	defaultCapacity = 160
+)
+
 // Merge combines the counts of buckets a and b into a.
 // Both buckets MUST be of same scale.
 //
@@ -41,40 +50,26 @@ func Merge(arel, brel Buckets) {
 		brel.CopyTo(arel)
 		return
 	}
-
-	a, b := Abs(arel), Abs(brel)
-
-	lo := min(a.Lower(), b.Lower())
-	up := max(a.Upper(), b.Upper())
-
-	size := up - lo
-
-	// TODO (lahsivjar): the below optimization is not able to take advantage
-	// of slices with greater length than what is required as the pdata model
-	// does not allow reslicing:
-	// https://github.com/open-telemetry/opentelemetry-collector/issues/12004
-	switch {
-	case a.Lower() == lo && size == a.BucketCounts().Len():
-		counts := a.BucketCounts()
-		for i := 0; i < size; i++ {
-			val := a.Abs(lo+i) + b.Abs(lo+i)
-			counts.SetAt(i, val)
-		}
-	case b.Lower() == lo && size == b.BucketCounts().Len():
-		counts := b.BucketCounts()
-		for i := 0; i < size; i++ {
-			val := a.Abs(lo+i) + b.Abs(lo+i)
-			counts.SetAt(i, val)
-		}
-		counts.MoveTo(a.BucketCounts())
-	default:
-		counts := pcommon.NewUInt64Slice()
-		counts.EnsureCapacity(size)
-		for i := 0; i < size; i++ {
-			val := a.Abs(lo+i) + b.Abs(lo+i)
-			counts.Append(val)
-		}
-		counts.MoveTo(a.BucketCounts())
+	if arel.BucketCounts().IncrementFrom(brel.BucketCounts(), int(brel.Offset()-arel.Offset())) {
+		// b fits into a
+		return
 	}
-	a.SetOffset(int32(lo))
+	if brel.BucketCounts().IncrementFrom(arel.BucketCounts(), int(arel.Offset()-brel.Offset())) {
+		// a fits into b
+		brel.BucketCounts().MoveTo(arel.BucketCounts())
+		arel.SetOffset(brel.Offset())
+		return
+	}
+	// creates a new bucket in a way so that consecutive merges will almost always fit into it and therefore reduces allocations
+	// this relies on the fact that the 'arel' histogram bucket will be reused as the merge target
+	aupper := int(arel.Offset()) + arel.BucketCounts().Len()
+	bupper := int(brel.Offset()) + brel.BucketCounts().Len()
+	capacity := max(aupper, bupper, defaultCapacity)
+	offset := min(arel.Offset(), brel.Offset(), defaultOffset)
+	counts := pcommon.NewUInt64Slice()
+	counts.EnsureCapacity(capacity)
+	counts.IncrementFrom(arel.BucketCounts(), int(arel.Offset()-offset))
+	counts.IncrementFrom(brel.BucketCounts(), int(brel.Offset()-offset))
+	counts.MoveTo(arel.BucketCounts())
+	arel.SetOffset(offset)
 }

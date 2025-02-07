@@ -57,6 +57,10 @@ func TestMerge(t *testing.T) {
 		a:    bins{ø, 1, 1, ø, ø, ø, ø, ø},
 		b:    bins{ø, ø, ø, ø, 1, 1, ø, ø},
 		want: bins{ø, 1, 1, 0, 1, 1, ø, ø},
+	}, {
+		a:    bins{ø, ø, ø, ø, 1, 1, ø, ø},
+		b:    bins{ø, ø, ø, ø, ø, ø, 1, 1},
+		want: bins{ø, ø, ø, 0, 1, 1, 1, 1},
 	}}
 
 	for _, cs := range cases {

@@ -2,6 +2,8 @@ module github.com/elastic/opentelemetry-collector-components/processor/lsminterv
 
 go 1.22.0
 
+replace go.opentelemetry.io/collector/pdata => ../../../../open-telemetry/opentelemetry-collector/pdata
+
 require (
 	github.com/axiomhq/hyperloglog v0.2.0
 	github.com/cockroachdb/pebble v1.1.3
