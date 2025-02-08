@@ -105,7 +105,6 @@ func TestExpoAdd(t *testing.T) {
 			bs := pmetric.NewExponentialHistogramDataPointBuckets()
 			expotest.ObserveInto(bs, expo.Scale(0), 1, 2, 3, 4)
 			expotest.ObserveInto(bs, expo.Scale(0), 4, 3, 2, 1)
-			bs.BucketCounts().Append([]uint64{0, 0}...) // rescaling leaves zeroed memory. this is expected
 			return bs
 		}()},
 	}}
