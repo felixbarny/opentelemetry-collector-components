@@ -78,6 +78,17 @@ const (
 	// committed. In order to achieve this we can estimate the size of the
 	// datapoint.
 	dbCommitDatapointsThresholdCount = 4096
+
+	// This processor uses a channel to decouple accepting batches in
+	// ConsumeMetrics from a background goroutine that merges and commits the
+	// metrics to the lsm database.
+	// This decoupling allows the background goroutine to have exclusive and
+	// uncontended access to the data.
+	// The size of said channel is limited by batchChannelSize to avoid
+	// unbounded memory growth from accepting data while the background process
+	// is running. The channel size doesn't need to be huge. It's ok to apply
+	// backpressure while the background process is running.
+	batchChannelSize = 16
 )
 
 type Processor struct {
@@ -93,6 +104,7 @@ type Processor struct {
 	next      consumer.Metrics
 
 	mu              sync.Mutex
+	valueChan       chan valueAndMeta
 	values          map[attribute.Set][]*merger.Value
 	totalDataPoints int
 	processingTime  time.Time
@@ -101,6 +113,11 @@ type Processor struct {
 	cancel        context.CancelFunc
 	exportStopped chan struct{}
 	logger        *zap.Logger
+}
+
+type valueAndMeta struct {
+	meta  attribute.Set
+	value *merger.Value
 }
 
 func newProcessor(cfg *config.Config, ivlDefs []intervalDef, log *zap.Logger, next consumer.Metrics) (*Processor, error) {
@@ -151,6 +168,7 @@ func newProcessor(cfg *config.Config, ivlDefs []intervalDef, log *zap.Logger, ne
 		wOpts:              writeOpts,
 		intervals:          ivlDefs,
 		next:               next,
+		valueChan:          make(chan valueAndMeta, batchChannelSize),
 		values:             make(map[attribute.Set][]*merger.Value),
 		processingTime:     time.Now().UTC().Truncate(ivlDefs[0].Duration),
 		ctx:                ctx,
@@ -184,23 +202,31 @@ func (p *Processor) Start(ctx context.Context, host component.Host) error {
 			select {
 			case <-p.ctx.Done():
 				return
+			case vm := <-p.valueChan:
+				p.mu.Lock()
+				// Accumulate values until there is enough total data points to commit.
+				// We don't use size of the pmetric here as getting the size is costly.
+				p.values[vm.meta] = append(p.values[vm.meta], vm.value)
+				p.totalDataPoints += vm.value.DatapointsCount()
+				p.mu.Unlock()
+				if p.totalDataPoints >= dbCommitDatapointsThresholdCount {
+					if err := p.commitValues(); err != nil {
+						p.logger.Warn(
+							"failed to commit value to database",
+							zap.Error(err), zap.Time("end_time", to),
+						)
+					}
+				}
+				continue
 			case <-timer.C:
 			}
 
-			p.mu.Lock()
 			p.processingTime = to
-			values := p.values
-			p.values = make(map[attribute.Set][]*merger.Value)
-			p.totalDataPoints = 0
-			p.mu.Unlock()
-
-			if len(values) != 0 {
-				if err := p.commitValues(values); err != nil {
-					p.logger.Warn(
-						"failed to commit value to database",
-						zap.Error(err), zap.Time("end_time", to),
-					)
-				}
+			if err := p.commitValues(); err != nil {
+				p.logger.Warn(
+					"failed to commit value to database",
+					zap.Error(err), zap.Time("end_time", to),
+				)
 			}
 
 			// Export the batch
@@ -231,19 +257,13 @@ func (p *Processor) Shutdown(ctx context.Context) error {
 		}
 	}
 
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
 	// Ensure all data in the database is exported
 	if p.db != nil {
 		var errs []error
 		p.logger.Info("exporting all data before shutting down")
-		if len(p.values) != 0 {
-			if err := p.commitValues(p.values); err != nil {
-				errs = append(errs, fmt.Errorf("failed to commit values: %w", err))
-			}
+		if err := p.commitValues(); err != nil {
+			errs = append(errs, fmt.Errorf("failed to commit values: %w", err))
 		}
-		p.values = nil
 
 		for _, ivl := range p.intervals {
 			// At any particular time there will be 1 export candidate for
@@ -259,6 +279,8 @@ func (p *Processor) Shutdown(ctx context.Context) error {
 		if len(errs) > 0 {
 			return fmt.Errorf("failed while running final export: %w", errors.Join(errs...))
 		}
+		p.mu.Lock()
+		defer p.mu.Unlock()
 		if err := p.db.Close(); err != nil {
 			return fmt.Errorf("failed to close database: %w", err)
 		}
@@ -345,9 +367,7 @@ func (p *Processor) ConsumeMetrics(ctx context.Context, md pmetric.Metrics) erro
 	}
 	clientMetaSet := attribute.NewSet(clientMeta...)
 
-	if err := p.updateValue(clientMetaSet, v); err != nil {
-		errs = append(errs, fmt.Errorf("failed to commit values: %w", err))
-	}
+	p.valueChan <- valueAndMeta{meta: clientMetaSet, value: v}
 
 	// Call next for the metrics remaining in the input
 	if err := p.next.ConsumeMetrics(ctx, nextMD); err != nil {
@@ -360,30 +380,18 @@ func (p *Processor) ConsumeMetrics(ctx context.Context, md pmetric.Metrics) erro
 	return nil
 }
 
-// updateValue updates the value to the processor cache. If the cache has
-// reached its threshold then the values are committed to the database.
-func (p *Processor) updateValue(meta attribute.Set, value *merger.Value) error {
+func (p *Processor) commitValues() error {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	// Accumulate values until there is enough total data points to commit.
-	// We don't use size of the pmetric here as getting the size is costly.
-	p.values[meta] = append(p.values[meta], value)
-	p.totalDataPoints += value.DatapointsCount()
-	if p.totalDataPoints >= dbCommitDatapointsThresholdCount {
-		if err := p.commitValues(p.values); err != nil {
-			return fmt.Errorf("failed to commit value: %w", err)
-		}
-		p.values = make(map[attribute.Set][]*merger.Value)
-		p.totalDataPoints = 0
+	if len(p.values) == 0 {
+		return nil
 	}
+	values := p.values
+	p.values = make(map[attribute.Set][]*merger.Value)
+	p.totalDataPoints = 0
+	p.mu.Unlock()
 
-	return nil
-}
-
-func (p *Processor) commitValues(metaValues map[attribute.Set][]*merger.Value) error {
 	batch := newBatch(p.db)
-	for meta, values := range metaValues {
+	for meta, values := range values {
 		// Merge all values for a given client metadata,
 		// so we reduce encoding/decoding round-trips.
 		value0 := values[0]
