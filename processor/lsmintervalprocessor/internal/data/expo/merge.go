@@ -50,11 +50,11 @@ func Merge(arel, brel Buckets) {
 		brel.CopyTo(arel)
 		return
 	}
-	if arel.BucketCounts().IncrementFrom(brel.BucketCounts(), int(brel.Offset()-arel.Offset())) {
+	if arel.BucketCounts().TryIncrementFrom(brel.BucketCounts(), int(brel.Offset()-arel.Offset())) {
 		// b fits into a
 		return
 	}
-	if brel.BucketCounts().IncrementFrom(arel.BucketCounts(), int(arel.Offset()-brel.Offset())) {
+	if brel.BucketCounts().TryIncrementFrom(arel.BucketCounts(), int(arel.Offset()-brel.Offset())) {
 		// a fits into b
 		brel.BucketCounts().MoveTo(arel.BucketCounts())
 		arel.SetOffset(brel.Offset())
@@ -68,8 +68,8 @@ func Merge(arel, brel Buckets) {
 	offset := min(arel.Offset(), brel.Offset(), defaultOffset)
 	counts := pcommon.NewUInt64Slice()
 	counts.EnsureCapacity(capacity)
-	counts.IncrementFrom(arel.BucketCounts(), int(arel.Offset()-offset))
-	counts.IncrementFrom(brel.BucketCounts(), int(brel.Offset()-offset))
+	counts.TryIncrementFrom(arel.BucketCounts(), int(arel.Offset()-offset))
+	counts.TryIncrementFrom(brel.BucketCounts(), int(brel.Offset()-offset))
 	counts.MoveTo(arel.BucketCounts())
 	arel.SetOffset(offset)
 }
