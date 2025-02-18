@@ -71,11 +71,13 @@ func Downscale(bs Buckets, from, to Scale) {
 		panic(fmt.Sprintf("cannot upscale without introducing error (%d -> %d)", from, to))
 	}
 
-	collapseN := int(from-to) * 2
-	offset := int(bs.Offset()) % collapseN
-	if offset < 0 {
-		offset = -offset
+	// TODO is there a way to do this in one go, without looping?
+	for at := from; at > to; at-- {
+		offset := int(bs.Offset()) % 2
+		if offset < 0 {
+			offset = -offset
+		}
+		bs.BucketCounts().Collapse(2, offset)
+		bs.SetOffset((bs.Offset() - int32(offset)) / 2)
 	}
-	bs.BucketCounts().Collapse(collapseN, offset)
-	bs.SetOffset((bs.Offset() - int32(offset)) / 2)
 }

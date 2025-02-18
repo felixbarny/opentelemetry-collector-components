@@ -99,7 +99,7 @@ func TestExpoAdd(t *testing.T) {
 		want: expdp{PosNeg: rawbs([]uint64{1, 2, 3, 1, 2}, -5)},
 	}, {
 		name: "scale/diff",
-		dp:   expdp{PosNeg: expotest.Observe(expo.Scale(1), 1, 2, 3, 4), Scale: 1},
+		dp:   expdp{PosNeg: expotest.Observe(expo.Scale(3), 1, 2, 3, 4), Scale: 3},
 		in:   expdp{PosNeg: expotest.Observe(expo.Scale(0), 4, 3, 2, 1), Scale: 0},
 		want: expdp{Scale: 0, PosNeg: func() expo.Buckets {
 			bs := pmetric.NewExponentialHistogramDataPointBuckets()

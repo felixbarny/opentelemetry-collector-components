@@ -47,6 +47,9 @@ func TestDownscale(t *testing.T) {
 		{scale: 1, bkt: " 2   2   2   2   2   2 "},
 		{scale: 0, bkt: "   4       4       4   "},
 	}, {
+		{scale: 3, bkt: "1 1 1 1 1 1 1 1 1 1 1 1"},
+		{scale: 0, bkt: "       8           4   "},
+	}, {
 		{scale: 2, bkt: "ø 1 1 1 1 1 1 1 1 1 1 1"},
 		{scale: 1, bkt: " 1   2   2   2   2   2 "},
 		{scale: 0, bkt: "   3       4       4   "},
@@ -54,6 +57,9 @@ func TestDownscale(t *testing.T) {
 		{scale: 2, bkt: "ø ø 1 1 1 1 1 1 1 1 1 1"},
 		{scale: 1, bkt: " ø   2   2   2   2   2 "},
 		{scale: 0, bkt: "   2       4       4   "},
+	}, {
+		{scale: 3, bkt: "ø ø 1 1 1 1 1 1 1 1 1 1 1 1 1 1"},
+		{scale: 0, bkt: "       6               8       "},
 	}, {
 		{scale: 2, bkt: "ø ø ø ø 1 1 1 1 1 1 1 1"},
 		{scale: 1, bkt: " ø   ø   2   2   2   2 "},
